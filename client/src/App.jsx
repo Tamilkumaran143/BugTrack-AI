@@ -3,23 +3,24 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import { DashboardLayout } from './layouts/DashboardLayout';
-
-import { LoginPage } from './pages/LoginPage';
-import { RegisterPage } from './pages/RegisterPage';
-import { DashboardPage } from './pages/DashboardPage';
-import { AdminDashboardPage } from './pages/AdminDashboardPage';
-import { TesterDashboardPage } from './pages/TesterDashboardPage';
-import { DeveloperDashboardPage } from './pages/DeveloperDashboardPage';
-import { ProjectsPage } from './pages/ProjectsPage';
-import { ProjectDetailsPage } from './pages/ProjectDetailsPage';
-import { IssuesPage } from './pages/IssuesPage';
-import { CreateIssuePage } from './pages/CreateIssuePage';
-import { IssueDetailsPage } from './pages/IssueDetailsPage';
-import { GitHubIntegrationPage } from './pages/GitHubIntegrationPage';
-import { TeamManagementPage } from './pages/TeamManagementPage';
-import { UserProfilePage } from './pages/UserProfilePage';
-import { SettingsPage } from './pages/SettingsPage';
 import { LoadingSpinner } from './components/LoadingSpinner';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
+
+const LoginPage = React.lazy(() => import('./pages/LoginPage').then((module) => ({ default: module.LoginPage })));
+const RegisterPage = React.lazy(() => import('./pages/RegisterPage').then((module) => ({ default: module.RegisterPage })));
+const DashboardPage = React.lazy(() => import('./pages/DashboardPage').then((module) => ({ default: module.DashboardPage })));
+const AdminDashboardPage = React.lazy(() => import('./pages/AdminDashboardPage').then((module) => ({ default: module.AdminDashboardPage })));
+const TesterDashboardPage = React.lazy(() => import('./pages/TesterDashboardPage').then((module) => ({ default: module.TesterDashboardPage })));
+const DeveloperDashboardPage = React.lazy(() => import('./pages/DeveloperDashboardPage').then((module) => ({ default: module.DeveloperDashboardPage })));
+const ProjectsPage = React.lazy(() => import('./pages/ProjectsPage').then((module) => ({ default: module.ProjectsPage })));
+const ProjectDetailsPage = React.lazy(() => import('./pages/ProjectDetailsPage').then((module) => ({ default: module.ProjectDetailsPage })));
+const IssuesPage = React.lazy(() => import('./pages/IssuesPage').then((module) => ({ default: module.IssuesPage })));
+const CreateIssuePage = React.lazy(() => import('./pages/CreateIssuePage').then((module) => ({ default: module.CreateIssuePage })));
+const IssueDetailsPage = React.lazy(() => import('./pages/IssueDetailsPage').then((module) => ({ default: module.IssueDetailsPage })));
+const GitHubIntegrationPage = React.lazy(() => import('./pages/GitHubIntegrationPage').then((module) => ({ default: module.GitHubIntegrationPage })));
+const TeamManagementPage = React.lazy(() => import('./pages/TeamManagementPage').then((module) => ({ default: module.TeamManagementPage })));
+const UserProfilePage = React.lazy(() => import('./pages/UserProfilePage').then((module) => ({ default: module.UserProfilePage })));
+const SettingsPage = React.lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })));
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, token, loading } = useAuth();
@@ -45,10 +46,16 @@ function ProtectedRoute({ children, allowedRoles }) {
 
 export function App() {
   return (
-    <BrowserRouter>
-      <ToastProvider>
-        <AuthProvider>
-          <Routes>
+    <AppErrorBoundary>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <ToastProvider>
+          <AuthProvider>
+            <React.Suspense fallback={
+              <div className="min-h-screen flex items-center justify-center">
+                <LoadingSpinner text="Loading page..." />
+              </div>
+            }>
+              <Routes>
             {/* Public Auth Routes */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
@@ -97,22 +104,38 @@ export function App() {
 
               {/* Issues & AI Bug Management */}
               <Route path="issues" element={<IssuesPage />} />
-              <Route path="issues/create" element={<CreateIssuePage />} />
+              <Route
+                path="issues/create"
+                element={
+                  <ProtectedRoute allowedRoles={['ADMIN', 'TESTER']}>
+                    <CreateIssuePage />
+                  </ProtectedRoute>
+                }
+              />
               <Route path="issues/:id" element={<IssueDetailsPage />} />
 
               {/* GitHub, Team, Profile, Settings */}
               <Route path="github" element={<GitHubIntegrationPage />} />
-              <Route path="team" element={<TeamManagementPage />} />
+              <Route
+                path="team"
+                element={
+                  <ProtectedRoute allowedRoles={['ADMIN']}>
+                    <TeamManagementPage />
+                  </ProtectedRoute>
+                }
+              />
               <Route path="profile" element={<UserProfilePage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
 
             {/* Fallback */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
-        </AuthProvider>
-      </ToastProvider>
-    </BrowserRouter>
+              </Routes>
+            </React.Suspense>
+          </AuthProvider>
+        </ToastProvider>
+      </BrowserRouter>
+    </AppErrorBoundary>
   );
 }
 

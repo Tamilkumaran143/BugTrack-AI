@@ -17,7 +17,7 @@ Welcome to **BugTrack AI**, an enterprise software issue management platform tha
 
 ## 2. Authentication & Demo Credentials
 
-The platform features pre-seeded accounts configured with distinct roles and permissions.
+For local development and demonstrations only, the platform can be populated with pre-seeded accounts configured with distinct roles and permissions. Do not use these credentials in production; the demo seeder refuses to run when `NODE_ENV=production`.
 
 > [!TIP]
 > **1-Click Quick Fill**: On the [Login Page](http://localhost:5173/login), click any of the role cards (**Admin**, **QA Tester**, **Developer**) to automatically fill the credentials.
@@ -177,8 +177,11 @@ npm run test
 # Compile production build of the frontend
 npm run build
 
-# Reset and re-seed the SQLite database with fresh demo data
+# Apply the Prisma schema without resetting or seeding database records
 npm run db:setup
+
+# Populate demo records only in a new, empty database
+npm run db:seed
 ```
 
 ---
@@ -187,10 +190,12 @@ npm run db:setup
 
 Environment variables are located in `server/.env`:
 
+Use unique random values for `JWT_SECRET` and `WEBHOOK_SECRET`; never commit real secrets or reuse placeholders in production.
+
 ```env
 PORT=5000
 DATABASE_URL="file:./dev.db"
-JWT_SECRET="bugtrack-ai-super-secret-jwt-key-2025-secure"
+JWT_SECRET="<generate-a-unique-secret>"
 JWT_EXPIRES_IN="7d"
 NODE_ENV="development"
 CORS_ORIGIN="http://localhost:5173"
@@ -198,8 +203,10 @@ CORS_ORIGIN="http://localhost:5173"
 # Optional External API Keys
 GEMINI_API_KEY=""      # Supply a Gemini API key to activate Gemini 1.5 Flash
 GITHUB_TOKEN=""        # Supply a GitHub Personal Access Token for higher rate limits
-WEBHOOK_SECRET="bugtrack-webhook-secret-token"
+WEBHOOK_SECRET="<generate-a-unique-secret>"
 ```
+
+In development, unset secrets are generated randomly for that server process, so restart requires signing in again. For production, replace both placeholders with separate random values of at least 32 characters; missing or placeholder secrets are rejected.
 
 > [!NOTE]
 > When `GEMINI_API_KEY` is not provided, BugTrack AI runs on its **Local Deterministic Fallback Engine**, ensuring that bug structuring, duplicate detection, and PR risk analysis continue operating offline.

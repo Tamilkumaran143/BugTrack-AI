@@ -6,14 +6,34 @@ async function register(req, res, next) {
   try {
     const { name, email, password, role = 'DEVELOPER', skills = 'General' } = req.body;
 
-    if (!name || !email || !password) {
+    if (
+      typeof name !== 'string'
+      || typeof email !== 'string'
+      || typeof password !== 'string'
+      || !name.trim()
+      || !email.trim()
+      || password.length < 8
+    ) {
       return res.status(400).json({
         success: false,
-        message: 'Name, email, and password are required fields.',
+        message: 'A name, valid email address, and password of at least 8 characters are required.',
       });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return res.status(400).json({ success: false, message: 'A valid email address is required.' });
+    }
+
+    if (typeof role !== 'string' || !['ADMIN', 'TESTER', 'DEVELOPER'].includes(role.toUpperCase())) {
+      return res.status(400).json({ success: false, message: 'Role must be ADMIN, TESTER, or DEVELOPER.' });
+    }
+    if (role.toUpperCase() === 'ADMIN') {
+      return res.status(403).json({ success: false, message: 'Administrator accounts cannot be self-registered.' });
+    }
+    if (typeof skills !== 'string') {
+      return res.status(400).json({ success: false, message: 'Skills must be a string.' });
+    }
 
     const existingUser = await prisma.user.findUnique({
       where: { email: normalizedEmail },
@@ -26,9 +46,6 @@ async function register(req, res, next) {
       });
     }
 
-    const validRoles = ['ADMIN', 'TESTER', 'DEVELOPER'];
-    const assignedRole = validRoles.includes(role.toUpperCase()) ? role.toUpperCase() : 'DEVELOPER';
-
     const passwordHash = await bcrypt.hash(password, 10);
 
     const user = await prisma.user.create({
@@ -36,7 +53,7 @@ async function register(req, res, next) {
         name: name.trim(),
         email: normalizedEmail,
         passwordHash,
-        role: assignedRole,
+        role: role.toUpperCase(),
         skills: skills.trim(),
       },
       select: {
@@ -68,7 +85,7 @@ async function login(req, res, next) {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password) {
       return res.status(400).json({
         success: false,
         message: 'Email and password are required.',
@@ -190,11 +207,27 @@ async function updateProfile(req, res, next) {
     const { name, skills, currentPassword, newPassword } = req.body;
     const updateData = {};
 
-    if (name) updateData.name = name.trim();
-    if (skills) updateData.skills = skills.trim();
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ success: false, message: 'Name must be a non-empty string.' });
+      }
+      updateData.name = name.trim();
+    }
+    if (skills !== undefined) {
+      if (typeof skills !== 'string') {
+        return res.status(400).json({ success: false, message: 'Skills must be a string.' });
+      }
+      updateData.skills = skills.trim();
+    }
 
     if (newPassword) {
-      if (!currentPassword) {
+      if (typeof newPassword !== 'string' || newPassword.length < 8) {
+        return res.status(400).json({
+          success: false,
+          message: 'New password must be at least 8 characters.',
+        });
+      }
+      if (typeof currentPassword !== 'string' || !currentPassword) {
         return res.status(400).json({
           success: false,
           message: 'Current password is required to set a new password.',
@@ -202,12 +235,19 @@ async function updateProfile(req, res, next) {
       }
 
       const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found.' });
+      }
       const isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
       if (!isMatch) {
         return res.status(400).json({
           success: false,
           message: 'Incorrect current password.',
         });
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        return res.status(400).json({ success: false, message: 'At least one valid profile field is required.' });
       }
 
       updateData.passwordHash = await bcrypt.hash(newPassword, 10);

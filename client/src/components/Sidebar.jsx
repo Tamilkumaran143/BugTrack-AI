@@ -26,9 +26,9 @@ export function Sidebar({ isOpen, onClose }) {
     ...(isDeveloper || isAdmin ? [{ to: '/developer', label: 'Developer Hub', icon: Code2, badge: 'Dev' }] : []),
     { to: '/projects', label: 'Projects', icon: FolderGit2 },
     { to: '/issues', label: 'Issue Tracker', icon: Bug },
-    { to: '/issues/create', label: 'Report Bug (AI)', icon: PlusCircle, highlight: true },
+    ...(isTester || isAdmin ? [{ to: '/issues/create', label: 'Report Bug (AI)', icon: PlusCircle, highlight: true }] : []),
     { to: '/github', label: 'GitHub & Risk AI', icon: GitPullRequest },
-    { to: '/team', label: 'Team Members', icon: Users2 },
+    ...(isAdmin ? [{ to: '/team', label: 'Team Members', icon: Users2 }] : []),
     { to: '/settings', label: 'System & AI Settings', icon: Settings },
   ];
 

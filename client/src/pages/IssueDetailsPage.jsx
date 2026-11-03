@@ -38,6 +38,7 @@ export function IssueDetailsPage() {
 
   const [issue, setIssue] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [issueLoadError, setIssueLoadError] = useState('');
 
   // Comments
   const [commentText, setCommentText] = useState('');
@@ -57,15 +58,43 @@ export function IssueDetailsPage() {
   // Status updating
   const [updatingStatus, setUpdatingStatus] = useState(false);
 
+  // AI Fix Assistant
+  const [aiAssistantLoading, setAiAssistantLoading] = useState(false);
+  const [aiFixAssistant, setAiFixAssistant] = useState(null);
+  const [showAiFixReview, setShowAiFixReview] = useState(false);
+  const [fixHistory, setFixHistory] = useState([]);
+  const [fixHistoryLoading, setFixHistoryLoading] = useState(false);
+  const [fixHistoryError, setFixHistoryError] = useState('');
+  const [fixOperationLoading, setFixOperationLoading] = useState(false);
+
+  const loadFixHistory = async (issueId) => {
+    setFixHistoryLoading(true);
+    setFixHistoryError('');
+    try {
+      const res = await api.get(`/ai/fix-assistant/history/${issueId}`);
+      if (res.data.success) {
+        setFixHistory(res.data.data);
+      }
+    } catch (err) {
+      setFixHistoryError(err.response?.data?.message || 'Unable to load applied patch history.');
+    } finally {
+      setFixHistoryLoading(false);
+    }
+  };
+
   const loadIssue = async () => {
     setLoading(true);
+    setIssueLoadError('');
     try {
       const res = await api.get(`/issues/${id}`);
       if (res.data.success) {
         setIssue(res.data.data);
+        await loadFixHistory(res.data.data.id);
+      } else {
+        setIssueLoadError('The issue could not be loaded.');
       }
     } catch (err) {
-      error('Failed to load issue details.');
+      setIssueLoadError(err.response?.data?.message || 'Failed to load issue details.');
     } finally {
       setLoading(false);
     }
@@ -117,24 +146,11 @@ export function IssueDetailsPage() {
     try {
       const res = await api.post('/github/link-pr', {
         issueId: issue.id,
-        prUrl: prUrl.trim() || undefined,
-        customPrData: !prUrl.trim()
-          ? {
-              repository: issue.project?.name.toLowerCase().replace(/\s+/g, '-') || 'demo/app',
-              prNumber: Math.floor(100 + Math.random() * 900),
-              title: `fix(${issue.issueKey}): patch defect and add tests`,
-              body: 'Automated patch resolving issue and adding regression guardrails.',
-              changedFiles: [
-                'server/src/controllers/authController.js',
-                'server/src/services/geminiService.js',
-                'client/src/pages/IssuesPage.jsx',
-              ],
-            }
-          : undefined,
+        prUrl: prUrl.trim(),
       });
 
       if (res.data.success) {
-        success('Pull Request linked and AI Code Change Risk Analysis executed!');
+        success(res.data.message || 'Verified pull request linked and analyzed.');
         setPrModalOpen(false);
         setPrUrl('');
         loadIssue();
@@ -186,8 +202,115 @@ export function IssueDetailsPage() {
     }
   };
 
-  if (loading || !issue) {
+  const handleAnalyzeFixAssistant = async () => {
+    if (!issue) return;
+    setAiAssistantLoading(true);
+    try {
+      const res = await api.post('/ai/fix-assistant/analyze', {
+        issueId: issue.id,
+        issueData: issue,
+        projectId: issue.projectId,
+      });
+
+      if (res.data.success) {
+        setAiFixAssistant(res.data.data);
+        setShowAiFixReview(Boolean(res.data.data.fix?.available));
+        success('AI Fix Assistant analyzed the issue.');
+      }
+    } catch (err) {
+      error(err.response?.data?.message || 'AI Fix Assistant analysis failed.');
+    } finally {
+      setAiAssistantLoading(false);
+    }
+  };
+
+  const handleFixAssistantAction = async (action) => {
+    if (!aiFixAssistant) return;
+
+    if (action === 'review') {
+      setShowAiFixReview((prev) => !prev);
+      return;
+    }
+
+    if (action === 'reject') {
+      setAiFixAssistant(null);
+      setShowAiFixReview(false);
+      info('Fix suggestion rejected.');
+      return;
+    }
+
+    if (action === 'regenerate') {
+      await handleAnalyzeFixAssistant();
+      return;
+    }
+
+    if (action === 'apply') {
+      const proposal = aiFixAssistant.fix;
+      if (!proposal?.available || !proposal.proposalId || !showAiFixReview) {
+        info('Review a valid source patch before applying it.');
+        setShowAiFixReview(true);
+        return;
+      }
+      if (!window.confirm(`Apply the reviewed patch to ${proposal.filePath}?`)) return;
+
+      setFixOperationLoading(true);
+      try {
+        const res = await api.post('/ai/fix-assistant/apply', {
+          proposalId: proposal.proposalId,
+          issueId: issue.id,
+          approved: true,
+        });
+        if (res.data.success) {
+          success(res.data.message);
+          await loadFixHistory(issue.id);
+        }
+      } catch (err) {
+        error(err.response?.data?.message || 'Unable to apply the approved patch.');
+      } finally {
+        setFixOperationLoading(false);
+      }
+      return;
+    }
+  };
+
+  const handleRollbackFix = async (operationId, appliedFiles = []) => {
+    if (!window.confirm(`Roll back the applied patch to ${appliedFiles.join(', ')}?`)) return;
+
+    setFixOperationLoading(true);
+    try {
+      const res = await api.post('/ai/fix-assistant/rollback', {
+        operationId,
+        issueId: issue.id,
+      });
+      if (res.data.success) {
+        success(res.data.message);
+        await loadFixHistory(issue.id);
+      }
+    } catch (err) {
+      error(err.response?.data?.message || 'Unable to roll back the applied patch.');
+    } finally {
+      setFixOperationLoading(false);
+    }
+  };
+
+  if (loading) {
     return <LoadingSpinner text="Loading defect intelligence profile..." />;
+  }
+  if (issueLoadError || !issue) {
+    return (
+      <div className="max-w-xl mx-auto rounded-2xl border border-rose-200 bg-white p-6 text-center shadow-sm">
+        <h2 className="text-lg font-bold text-slate-900">Issue unavailable</h2>
+        <p className="mt-2 text-sm text-rose-700">{issueLoadError || 'The requested issue could not be found.'}</p>
+        <div className="mt-5 flex justify-center gap-3">
+          <button type="button" onClick={loadIssue} className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-bold text-white">
+            Retry
+          </button>
+          <button type="button" onClick={() => navigate(-1)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700">
+            Go back
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // Find linked PR
@@ -292,6 +415,17 @@ export function IssueDetailsPage() {
               </button>
             )}
 
+            {(isDeveloper || isAdmin) && (
+              <button
+                onClick={handleAnalyzeFixAssistant}
+                disabled={aiAssistantLoading}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded-xl transition shadow-sm"
+              >
+                <Sparkles className="w-4 h-4" />
+                {aiAssistantLoading ? 'Analyzing...' : 'AI Fix Assistant'}
+              </button>
+            )}
+
             {/* Admin Assign Button */}
             {isAdmin && (
               <button
@@ -386,6 +520,239 @@ export function IssueDetailsPage() {
           </div>
         </div>
       </div>
+
+      {aiFixAssistant && (
+        <div className="bg-white rounded-3xl border border-violet-200/80 p-6 shadow-sm space-y-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-violet-100 text-violet-600">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">AI Fix Assistant</h3>
+                <p className="text-[11px] text-slate-500">
+                  Source status: {aiFixAssistant.sourceStatus || 'static_analysis'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => handleFixAssistantAction('review')}
+                className="px-3 py-2 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition"
+              >
+                Review Changes
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFixAssistantAction('apply')}
+                disabled={!aiFixAssistant.fix?.available || fixOperationLoading}
+                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 text-white text-xs font-bold rounded-xl transition"
+              >
+                {fixOperationLoading ? 'Applying...' : 'Approve & Apply Patch'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFixAssistantAction('reject')}
+                className="px-3 py-2 border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-bold rounded-xl transition"
+              >
+                Reject Fix
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFixAssistantAction('regenerate')}
+                className="px-3 py-2 border border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-xs font-bold rounded-xl transition"
+              >
+                Regenerate Suggestion
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Confirmed information</p>
+              <ul className="space-y-2 text-xs text-slate-700">
+                {(aiFixAssistant.confirmedInformation || []).map((item, index) => (
+                  <li key={index} className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">AI-generated assumptions</p>
+              <ul className="space-y-2 text-xs text-slate-700">
+                {(aiFixAssistant.assumptions || []).map((item, index) => (
+                  <li key={index} className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 mt-1.5" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="space-y-3 rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-violet-700">Possible root cause</p>
+              <p className="text-sm text-slate-700 leading-relaxed">{aiFixAssistant.possibleRootCause}</p>
+            </div>
+
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Recommended solution</p>
+              <p className="text-sm text-slate-700 leading-relaxed">{aiFixAssistant.recommendedSolution}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Affected modules</p>
+              <ul className="space-y-2 text-xs text-slate-700">
+                {(aiFixAssistant.affectedModules || []).map((item, index) => (
+                  <li key={index} className="font-mono bg-white border border-slate-200 rounded-lg px-2.5 py-2">{item}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Relevant files</p>
+              <ul className="space-y-2 text-xs text-slate-700">
+                {(aiFixAssistant.relevantFiles || []).map((item, index) => (
+                  <li key={index} className="font-mono bg-white border border-slate-200 rounded-lg px-2.5 py-2">{item}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-amber-800">Potential side effects</p>
+              <ul className="space-y-2 text-xs text-amber-900">
+                {(aiFixAssistant.potentialSideEffects || []).map((item, index) => (
+                  <li key={index} className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 mt-1.5" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="space-y-3 rounded-2xl border border-cyan-200 bg-cyan-50/60 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-cyan-800">Suggested validation steps</p>
+              <ul className="space-y-2 text-xs text-cyan-900">
+                {(aiFixAssistant.suggestedValidationSteps || []).map((item, index) => (
+                  <li key={index} className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-cyan-500 mt-1.5" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          {showAiFixReview && aiFixAssistant.fix && (
+            <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <h4 className="text-sm font-bold text-slate-900">Fix review</h4>
+                <span className="px-2.5 py-1 rounded-full bg-violet-100 text-violet-700 text-[10px] font-bold uppercase tracking-wider">
+                  {aiFixAssistant.fix.status || 'suggested'}
+                </span>
+              </div>
+
+              {aiFixAssistant.fix.available ? (
+                <>
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">File path</p>
+                    <p className="font-mono text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-2">{aiFixAssistant.fix.filePath}</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Original code</p>
+                      <pre className="text-[11px] whitespace-pre-wrap bg-slate-900 text-slate-100 rounded-xl p-3 overflow-auto max-h-72 border border-slate-800">
+                        {aiFixAssistant.fix.originalCode || 'No source snippet available.'}
+                      </pre>
+                    </div>
+
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Suggested modified code</p>
+                      <pre className="text-[11px] whitespace-pre-wrap bg-violet-950 text-violet-100 rounded-xl p-3 overflow-auto max-h-72 border border-violet-800">
+                        {aiFixAssistant.fix.suggestedCode || 'No suggested patch available.'}
+                      </pre>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 text-xs text-slate-700">
+                    <p><span className="font-bold">Explanation:</span> {aiFixAssistant.fix.explanation}</p>
+                    <p><span className="font-bold">Why the change may resolve the issue:</span> {aiFixAssistant.fix.whyItMayResolveTheIssue}</p>
+                    <p><span className="font-bold">Possible risks:</span> {aiFixAssistant.fix.possibleRisks?.join(' ')}</p>
+                  </div>
+                  <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                  Review both code snippets before approving. Applying the patch requires a separate confirmation and fails if the source has changed.
+                  </p>
+                </>
+              ) : (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  {aiFixAssistant.fix?.missingInformation || 'No relevant source code is available for a concrete patch proposal.'}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {(isDeveloper || isAdmin) && (
+        <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Applied patch history</h3>
+              <p className="mt-1 text-xs text-slate-500">Lists source files that were actually modified, not backup files.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => loadFixHistory(issue.id)}
+              disabled={fixHistoryLoading}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 disabled:opacity-50"
+            >
+              {fixHistoryLoading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+          {fixHistoryError && <p role="alert" className="text-sm text-rose-700">{fixHistoryError}</p>}
+          {!fixHistoryLoading && !fixHistoryError && fixHistory.length === 0 && (
+            <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No source patches have been applied to this issue.</p>
+          )}
+          {fixHistory.map((operation) => (
+            <div key={operation.operationId} className="space-y-3 rounded-xl border border-slate-200 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${
+                  operation.status === 'applied' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                }`}>
+                  {operation.status}
+                </span>
+                <time className="text-xs text-slate-500">{new Date(operation.appliedAt).toLocaleString()}</time>
+              </div>
+              <ul className="space-y-2">
+                {(operation.appliedFiles || []).map((filePath) => (
+                  <li key={filePath} className="rounded-lg bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700">{filePath}</li>
+                ))}
+              </ul>
+              {operation.status === 'applied' && (isAdmin || operation.appliedBy === user?.id) && (
+                <button
+                  type="button"
+                  onClick={() => handleRollbackFix(operation.operationId, operation.appliedFiles)}
+                  disabled={fixOperationLoading}
+                  className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-bold text-rose-700 disabled:opacity-50"
+                >
+                  Roll back patch
+                </button>
+              )}
+            </div>
+          ))}
+        </section>
+      )}
 
       {/* Linked GitHub Pull Request & AI Code Change Risk Analysis Panel */}
       {latestPr && (
@@ -563,14 +930,15 @@ export function IssueDetailsPage() {
               GitHub Pull Request URL
             </label>
             <input
-              type="text"
+              type="url"
+              required
               value={prUrl}
               onChange={(e) => setPrUrl(e.target.value)}
               placeholder="e.g. https://github.com/facebook/react/pull/28419"
               className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
             />
             <p className="text-[11px] text-slate-400 mt-1">
-              Leave blank to automatically simulate a sample PR patch with changed code files.
+              A live GitHub API lookup is required; pull request details are never simulated.
             </p>
           </div>
 
@@ -591,7 +959,7 @@ export function IssueDetailsPage() {
             </button>
             <button
               type="submit"
-              disabled={linkingPr}
+              disabled={linkingPr || !prUrl.trim()}
               className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition shadow-sm"
             >
               {linkingPr ? 'Analyzing with AI...' : 'Link PR & Analyze'}

@@ -54,6 +54,20 @@ describe('Project & Issue Lifecycle Integration Suite', () => {
     expect(res.body.success).toBe(true);
     expect(Array.isArray(res.body.data)).toBe(true);
     expect(res.body.data.length).toBeGreaterThan(0);
+
+    const usersRes = await request(app)
+      .get('/api/auth/users')
+      .set('Authorization', `Bearer ${adminToken}`);
+    const tester = usersRes.body.data.find((user) => user.email === 'tester@bugtrack.ai');
+    const developer = usersRes.body.data.find((user) => user.email === 'developer@bugtrack.ai');
+
+    for (const user of [tester, developer]) {
+      const membershipRes = await request(app)
+        .post(`/api/projects/${testProjectId}/members`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ userId: user.id });
+      expect(membershipRes.status).toBe(200);
+    }
   });
 
   it('should allow TESTER to report a bug with auto-generated issueKey', async () => {

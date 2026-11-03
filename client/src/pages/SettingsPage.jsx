@@ -15,7 +15,8 @@ import { useToast } from '../context/ToastContext';
 
 export function SettingsPage() {
   const [health, setHealth] = useState(null);
-  const { success } = useToast();
+  const [healthError, setHealthError] = useState('');
+  const { success, error } = useToast();
 
   useEffect(() => {
     async function checkHealth() {
@@ -23,16 +24,23 @@ export function SettingsPage() {
         const res = await api.get('/health');
         setHealth(res.data);
       } catch (e) {
-        console.warn('Health check note', e);
+        setHealthError(e.response?.data?.message || 'Live system diagnostics are unavailable.');
       }
     }
     checkHealth();
   }, []);
 
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text);
-    success('Copied to clipboard!');
+  const copyToClipboard = async (text) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable in this browser context.');
+      await navigator.clipboard.writeText(text);
+      success('Copied to clipboard.');
+    } catch (err) {
+      error(err.message || 'Unable to copy to clipboard.');
+    }
   };
+
+  const systemHealthy = health?.status === 'healthy' && health?.database === 'connected';
 
   return (
     <div className="space-y-6 animate-fade-in max-w-4xl mx-auto">
@@ -61,11 +69,15 @@ export function SettingsPage() {
             </div>
           </div>
 
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+          <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
+            systemHealthy ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
+              healthError ? 'bg-rose-100 text-rose-800 border-rose-300' : 'bg-amber-100 text-amber-800 border-amber-300'
+          }`}>
             <CheckCircle className="w-3.5 h-3.5" />
-            Operational
+            {systemHealthy ? 'Operational' : healthError ? 'Unavailable' : 'Checking'}
           </span>
         </div>
+        {healthError && <p role="alert" className="text-sm text-rose-700">{healthError}</p>}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80">
@@ -74,7 +86,7 @@ export function SettingsPage() {
               Active Engine
             </h4>
             <p className="text-sm font-bold text-slate-800">
-              BugTrack Local Deterministic Fallback Engine
+              {health?.fallbackEngine === 'active' ? 'BugTrack Local Deterministic Fallback Engine' : 'Status unavailable'}
             </p>
             <p className="text-xs text-slate-500 mt-1 leading-snug">
               Ensures 100% offline uptime, deterministic bug structuring, keyword duplicate scoring, and PR risk analysis without external API dependencies.
@@ -86,9 +98,13 @@ export function SettingsPage() {
               <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
               Cloud Model (Optional)
             </h4>
-            <p className="text-sm font-bold text-slate-800">Google Gemini 1.5 Flash</p>
+            <p className="text-sm font-bold text-slate-800">
+              {health?.geminiConfigured ? 'Configured (Google Gemini)' : 'Not configured'}
+            </p>
             <p className="text-xs text-slate-500 mt-1 leading-snug">
-              Activated automatically whenever a valid <code className="text-brand-600 font-mono">GEMINI_API_KEY</code> is configured in <code className="font-mono">server/.env</code>.
+              {health?.fixAssistantSourceSharingEnabled
+                ? 'AI Fix Assistant source sharing is enabled by explicit server configuration.'
+                : 'AI Fix Assistant will not send source code to Gemini unless source sharing is explicitly enabled on the server.'}
             </p>
           </div>
         </div>
@@ -113,7 +129,9 @@ export function SettingsPage() {
           </div>
           <div className="flex justify-between">
             <span className="text-slate-500">Prisma Client:</span>
-            <span className="font-bold text-emerald-600">v5.22.0 (Active)</span>
+            <span className={`font-bold ${health?.database === 'connected' ? 'text-emerald-600' : 'text-amber-700'}`}>
+              {health?.database === 'connected' ? 'Connected' : 'Status unavailable'}
+            </span>
           </div>
           <div className="flex justify-between">
             <span className="text-slate-500">Database Location:</span>

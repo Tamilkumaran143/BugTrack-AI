@@ -1,12 +1,30 @@
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
+const config = require('../src/config');
 
 const prisma = new PrismaClient();
 
 async function main() {
+  if (config.NODE_ENV === 'production') {
+    throw new Error('Demo seeding is disabled in production.');
+  }
+
   console.log('🌱 Starting BugTrack AI database seeding...');
 
-  // Clean existing data
+  const existingRecordCounts = await Promise.all([
+    prisma.user.count(),
+    prisma.project.count(),
+    prisma.projectMember.count(),
+    prisma.issue.count(),
+    prisma.comment.count(),
+    prisma.activity.count(),
+    prisma.pullRequest.count(),
+    prisma.verification.count(),
+  ]);
+  if (existingRecordCounts.some((count) => count > 0)) {
+    throw new Error('Refusing to seed a non-empty database. Existing users and project records are preserved.');
+  }
+
   await prisma.verification.deleteMany({});
   await prisma.pullRequest.deleteMany({});
   await prisma.activity.deleteMany({});

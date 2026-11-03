@@ -73,7 +73,7 @@ function requireProjectMember(allowedRoles = []) {
     try {
       const projectId = req.params.projectId || req.params.id || req.body.projectId;
       if (!projectId) {
-        return next();
+        return res.status(400).json({ success: false, message: 'Project ID is required.' });
       }
 
       // System Admins always have access
@@ -112,8 +112,80 @@ function requireProjectMember(allowedRoles = []) {
   };
 }
 
+function requireIssueProjectMember() {
+  return async (req, res, next) => {
+    try {
+      const issue = await prisma.issue.findFirst({
+        where: { OR: [{ id: req.params.id }, { issueKey: req.params.id }] },
+        select: { projectId: true },
+      });
+
+      if (!issue) {
+        return res.status(404).json({ success: false, message: 'Issue not found.' });
+      }
+      if (req.user.role === 'ADMIN') return next();
+
+      const membership = await prisma.projectMember.findUnique({
+        where: {
+          projectId_userId: {
+            projectId: issue.projectId,
+            userId: req.user.id,
+          },
+        },
+      });
+
+      if (!membership) {
+        return res.status(404).json({ success: false, message: 'Issue not found.' });
+      }
+
+      req.issueProjectId = issue.projectId;
+      req.projectMember = membership;
+      return next();
+    } catch (error) {
+      return next(error);
+    }
+  };
+}
+
+function requireIssueProjectMemberFromBody({ required = true } = {}) {
+  return async (req, res, next) => {
+    try {
+      const issueId = req.body?.issueId;
+      if (!issueId && !required) return next();
+      if (typeof issueId !== 'string' || !issueId.trim()) {
+        return res.status(400).json({ success: false, message: 'Issue ID is required.' });
+      }
+
+      const issue = await prisma.issue.findUnique({
+        where: { id: issueId },
+        select: { projectId: true },
+      });
+      if (!issue) return res.status(404).json({ success: false, message: 'Issue not found.' });
+      if (req.user.role === 'ADMIN') return next();
+
+      const membership = await prisma.projectMember.findUnique({
+        where: {
+          projectId_userId: {
+            projectId: issue.projectId,
+            userId: req.user.id,
+          },
+        },
+      });
+      if (!membership) return res.status(404).json({ success: false, message: 'Issue not found.' });
+
+      req.issueProjectId = issue.projectId;
+      req.projectMember = membership;
+      return next();
+    } catch (error) {
+      return next(error);
+    }
+  };
+}
+
 module.exports = {
   authenticate,
   authorize,
   requireProjectMember,
+  requireIssueProjectMember,
+  requireIssueProjectMemberFromBody,
 };

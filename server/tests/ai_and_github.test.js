@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+﻿import { describe, it, expect, beforeAll } from 'vitest';
+import crypto from 'node:crypto';
 import request from 'supertest';
 import app from '../src/app';
+import config from '../src/config';
 
 describe('AI Engine & GitHub Integration Suite', () => {
   let testerToken;
@@ -18,7 +20,6 @@ describe('AI Engine & GitHub Integration Suite', () => {
       .send({ email: 'developer@bugtrack.ai', password: 'Developer@123' });
     devToken = devLogin.body.data.token;
 
-    // Get an existing project
     const projRes = await request(app)
       .get('/api/projects')
       .set('Authorization', `Bearer ${testerToken}`);
@@ -105,7 +106,7 @@ describe('AI Engine & GitHub Integration Suite', () => {
 
     const res = await request(app)
       .post('/api/ai/review-change')
-      .set('Authorization', `Bearer ${devToken}`)
+      .set('Authorization', `Bearer ${testerToken}`)
       .send({
         prData,
         issueData: {
@@ -128,13 +129,62 @@ describe('AI Engine & GitHub Integration Suite', () => {
     expect(analysis.disclaimer).toBeDefined();
   });
 
-  it('should handle GitHub ping webhook with 200 response', async () => {
+  it('should analyze an issue with the AI Fix Assistant and produce a structured review', async () => {
     const res = await request(app)
-      .post('/api/webhooks/github')
-      .set('x-github-event', 'ping')
-      .send({ zen: 'Keep it logically awesome.' });
+      .post('/api/ai/fix-assistant/analyze')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({
+        issueData: {
+          title: 'Login button hangs after token refresh',
+          description: 'After the session refreshes, the login button becomes unresponsive and the user cannot continue.',
+          stepsToReproduce: '1. Sign in\n2. Wait for token refresh\n3. Click Login again',
+          expectedResult: 'User should be redirected or shown a valid message.',
+          actualResult: 'Button hangs and UI remains blocked.',
+          severity: 'HIGH',
+          priority: 'HIGH',
+          project: { name: 'BugTrack AI', githubRepository: 'https://github.com/example/project' },
+        },
+      });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(res.body.data.possibleRootCause).toBeDefined();
+    expect(Array.isArray(res.body.data.confirmedInformation)).toBe(true);
+    expect(Array.isArray(res.body.data.assumptions)).toBe(true);
+  });
+
+  it('should evaluate the repository workspace without executing code', async () => {
+    const res = await request(app)
+      .post('/api/ai/fix-assistant/repository-analysis')
+      .set('Authorization', `Bearer ${devToken}`)
+      .send({ repoPath: process.cwd() });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveProperty('available');
+    expect(res.body.data).toHaveProperty('note');
+  });
+
+  it('should handle GitHub ping webhook with 200 response', async () => {
+    const payload = { zen: 'Keep it logically awesome.' };
+    const signature = `sha256=${crypto.createHmac('sha256', config.WEBHOOK_SECRET).update(JSON.stringify(payload)).digest('hex')}`;
+    const res = await request(app)
+      .post('/api/webhooks/github')
+      .set('x-github-event', 'ping')
+      .set('x-hub-signature-256', signature)
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it('should reject unsigned GitHub webhooks', async () => {
+    const res = await request(app)
+      .post('/api/webhooks/github')
+      .set('x-github-event', 'ping')
+      .send({ zen: 'Unsigned payload.' });
+
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
   });
 });

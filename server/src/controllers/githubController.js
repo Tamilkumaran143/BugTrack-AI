@@ -38,10 +38,10 @@ async function connectRepo(req, res, next) {
 
 async function linkPullRequest(req, res, next) {
   try {
-    const { issueId, prUrl, customPrData } = req.body;
+    const { issueId, prUrl } = req.body;
 
-    if (!issueId) {
-      return res.status(400).json({ success: false, message: 'issueId is required.' });
+    if (typeof issueId !== 'string' || typeof prUrl !== 'string' || !prUrl.trim()) {
+      return res.status(400).json({ success: false, message: 'A real GitHub pull request URL and issueId are required.' });
     }
 
     const issue = await prisma.issue.findUnique({
@@ -52,95 +52,90 @@ async function linkPullRequest(req, res, next) {
     if (!issue) {
       return res.status(404).json({ success: false, message: 'Issue not found.' });
     }
+    if (req.user.role === 'DEVELOPER' && issue.assigneeId !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Only the assigned developer can link a pull request.' });
+    }
 
-    let prInfo = null;
-
-    if (customPrData && customPrData.prNumber && customPrData.repository) {
-      // Manual PR data fallback
-      prInfo = {
-        repository: customPrData.repository,
-        prNumber: parseInt(customPrData.prNumber, 10),
-        title: customPrData.title || `PR #${customPrData.prNumber}`,
-        body: customPrData.body || '',
-        state: customPrData.state || 'open',
-        url: customPrData.url || `https://github.com/${customPrData.repository}/pull/${customPrData.prNumber}`,
-        changedFiles: Array.isArray(customPrData.changedFiles) ? customPrData.changedFiles : [],
-      };
-    } else if (prUrl) {
-      const parsed = githubService.parsePrUrl(prUrl);
-      if (!parsed) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid GitHub PR URL. Format: https://github.com/owner/repo/pull/123',
-        });
-      }
-
-      prInfo = await githubService.fetchPullRequest(parsed.owner, parsed.repo, parsed.prNumber);
-    } else {
+    const parsed = githubService.parsePrUrl(prUrl);
+    if (!parsed) {
       return res.status(400).json({
         success: false,
-        message: 'Either prUrl or customPrData is required.',
+        message: 'Invalid GitHub PR URL. Use https://github.com/owner/repo/pull/123.',
       });
+    }
+    const prInfo = await githubService.fetchPullRequest(parsed.owner, parsed.repo, parsed.prNumber);
+    const configuredRepository = githubService.parseRepoUrl(issue.project.githubRepository);
+    if (configuredRepository && configuredRepository.fullName.toLowerCase() !== prInfo.repository.toLowerCase()) {
+      return res.status(400).json({ success: false, message: 'The pull request repository does not match the project repository.' });
+    }
+    const existingPr = await prisma.pullRequest.findFirst({
+      where: { issueId: issue.id, repository: prInfo.repository, prNumber: prInfo.prNumber },
+      select: { id: true },
+    });
+    if (existingPr) {
+      return res.status(409).json({ success: false, message: 'This pull request is already linked to the issue.' });
     }
 
     // Run AI Code Change Risk Analysis
     const riskAnalysis = await geminiService.analyzeCodeChangeRisk(prInfo, issue);
-
-    // Save Pull Request in database
-    const savedPr = await prisma.pullRequest.create({
-      data: {
-        issueId: issue.id,
-        repository: prInfo.repository,
-        prNumber: prInfo.prNumber,
-        title: prInfo.title,
-        url: prInfo.url,
-        state: prInfo.state,
-        changedFiles: JSON.stringify(prInfo.changedFiles || []),
-        aiSummary: riskAnalysis.changeSummary || prInfo.body || 'PR linked',
-        riskNotes: JSON.stringify(riskAnalysis),
-      },
-    });
-
-    // Record activity
-    await prisma.activity.create({
-      data: {
-        issueId: issue.id,
-        userId: req.user.id,
-        action: 'PR_LINKED',
-        oldValue: null,
-        newValue: `Linked PR #${prInfo.prNumber} (${prInfo.repository}) - Risk: ${riskAnalysis.riskLevel}`,
-      },
-    });
-
-    // Optionally auto transition issue to READY_FOR_TESTING if it was IN_PROGRESS
-    let updatedIssue = issue;
-    if (issue.status === 'IN_PROGRESS' || issue.status === 'ASSIGNED') {
-      updatedIssue = await prisma.issue.update({
-        where: { id: issue.id },
-        data: { status: 'READY_FOR_TESTING' },
-      });
-
-      await prisma.activity.create({
+    const shouldMoveToTesting = issue.status === 'IN_PROGRESS' && prInfo.merged;
+    const saved = await prisma.$transaction(async (tx) => {
+      const pullRequest = await tx.pullRequest.create({
         data: {
           issueId: issue.id,
-          userId: req.user.id,
-          action: 'STATUS_CHANGE',
-          oldValue: issue.status,
-          newValue: 'READY_FOR_TESTING',
+          repository: prInfo.repository,
+          prNumber: prInfo.prNumber,
+          title: prInfo.title,
+          url: prInfo.url,
+          state: prInfo.state,
+          changedFiles: JSON.stringify(prInfo.changedFiles),
+          aiSummary: riskAnalysis.changeSummary || prInfo.body || 'Pull request linked.',
+          riskNotes: JSON.stringify(riskAnalysis),
         },
       });
-    }
+
+      const updatedIssue = shouldMoveToTesting
+        ? await tx.issue.update({
+            where: { id: issue.id },
+            data: { status: 'READY_FOR_TESTING' },
+          })
+        : issue;
+
+      await tx.activity.createMany({
+        data: [
+          {
+            issueId: issue.id,
+            userId: req.user.id,
+            action: 'PR_LINKED',
+            newValue: `Linked verified PR #${prInfo.prNumber} (${prInfo.repository}) - Risk: ${riskAnalysis.riskLevel}`,
+          },
+          ...(shouldMoveToTesting
+            ? [{
+                issueId: issue.id,
+                userId: req.user.id,
+                action: 'STATUS_CHANGE',
+                oldValue: issue.status,
+                newValue: 'READY_FOR_TESTING',
+              }]
+            : []),
+        ],
+      });
+
+      return { pullRequest, issue: updatedIssue };
+    });
 
     return res.status(201).json({
       success: true,
-      message: 'Pull Request linked and analyzed successfully.',
+      message: shouldMoveToTesting
+        ? 'Verified pull request linked and merged fix moved to QA.'
+        : 'Verified pull request linked and analyzed.',
       data: {
         pullRequest: {
-          ...savedPr,
-          changedFiles: JSON.parse(savedPr.changedFiles),
-          riskNotes: JSON.parse(savedPr.riskNotes),
+          ...saved.pullRequest,
+          changedFiles: JSON.parse(saved.pullRequest.changedFiles),
+          riskNotes: JSON.parse(saved.pullRequest.riskNotes),
         },
-        issue: updatedIssue,
+        issue: saved.issue,
       },
     });
   } catch (error) {

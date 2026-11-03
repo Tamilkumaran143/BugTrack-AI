@@ -6,6 +6,13 @@ const PORT = config.PORT;
 
 async function startServer() {
   try {
+    if (
+      config.NODE_ENV === 'production'
+      && (!config.JWT_SECRET || !config.WEBHOOK_SECRET || config.CORS_ORIGIN === '*')
+    ) {
+      throw new Error('JWT_SECRET, WEBHOOK_SECRET, and a restricted CORS_ORIGIN must be configured in production.');
+    }
+
     // Verify database connection
     await prisma.$connect();
     console.log('✅ SQLite Database connected successfully via Prisma');

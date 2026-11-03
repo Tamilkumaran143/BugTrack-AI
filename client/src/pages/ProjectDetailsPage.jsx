@@ -24,7 +24,7 @@ import { useToast } from '../context/ToastContext';
 export function ProjectDetailsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const { success, error } = useToast();
 
   const [project, setProject] = useState(null);
@@ -48,15 +48,16 @@ export function ProjectDetailsPage() {
   const loadProjectDetails = async () => {
     setLoading(true);
     try {
-      const [projRes, issuesRes, usersRes] = await Promise.all([
+      const requests = [
         api.get(`/projects/${id}`),
         api.get('/issues', { params: { projectId: id } }),
-        api.get('/auth/users'),
-      ]);
+      ];
+      if (isAdmin) requests.push(api.get('/auth/users'));
+      const [projRes, issuesRes, usersRes] = await Promise.all(requests);
 
       if (projRes.data.success) setProject(projRes.data.data);
       if (issuesRes.data.success) setIssues(issuesRes.data.data);
-      if (usersRes.data.success) setAllUsers(usersRes.data.data);
+      setAllUsers(usersRes?.data?.success ? usersRes.data.data : []);
     } catch (err) {
       error('Failed to load project details.');
     } finally {
@@ -66,7 +67,7 @@ export function ProjectDetailsPage() {
 
   useEffect(() => {
     loadProjectDetails();
-  }, [id]);
+  }, [id, isAdmin]);
 
   const handleAddMember = async (e) => {
     e.preventDefault();
@@ -161,13 +162,13 @@ export function ProjectDetailsPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Link
+            {(isAdmin || project.members?.some((member) => member.userId === user?.id && member.role === 'TESTER')) && <Link
               to={`/issues/create?projectId=${project.id}`}
               className="inline-flex items-center gap-1.5 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold rounded-xl shadow-sm transition"
             >
               <Plus className="w-4 h-4" />
               Report Defect
-            </Link>
+            </Link>}
 
             {isAdmin && (
               <button

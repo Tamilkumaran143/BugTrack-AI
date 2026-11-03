@@ -5,7 +5,6 @@ import {
   Lock,
   Mail,
   User,
-  Shield,
   ArrowRight,
   Code2,
   CheckCircle2,
@@ -106,10 +105,10 @@ export function RegisterPage() {
                 <input
                   type="password"
                   required
-                  minLength={6}
+                  minLength={8}
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder="Minimum 6 characters"
+                  placeholder="Minimum 8 characters"
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
                 />
               </div>
@@ -120,11 +119,10 @@ export function RegisterPage() {
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
                 Platform Role
               </label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 {[
                   { role: 'DEVELOPER', label: 'Developer', icon: Code2 },
                   { role: 'TESTER', label: 'QA Tester', icon: CheckCircle2 },
-                  { role: 'ADMIN', label: 'Admin', icon: Shield },
                 ].map((item) => {
                   const Icon = item.icon;
                   const isSelected = formData.role === item.role;

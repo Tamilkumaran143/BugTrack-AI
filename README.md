@@ -251,7 +251,7 @@ model Verification {
 
 ## 7. Demo Accounts & Credentials
 
-The database is pre-seeded with three demo accounts representing the primary system roles. **You can click the 1-click demo buttons directly on the Login page to pre-fill credentials instantly:**
+These credentials are for local development and demonstrations only. The demo seeder refuses to run in production, and the 1-click credential cards are excluded from production builds.
 
 | Role | Email | Password | Primary Capabilities |
 |---|---|---|---|
@@ -276,11 +276,11 @@ Additional pre-seeded developers:
 cd C:\Users\tamil\.gemini\antigravity\scratch\bugtrack-ai
 ```
 
-### Step 2: Automated Database Setup & Seeding
+### Step 2: Database Setup
 ```bash
 npm run db:setup
 ```
-*This command runs Prisma client generation, creates the SQLite `dev.db` database, applies all schema tables, and populates initial demo users, projects, issues, PRs, and verifications.*
+*This command generates the Prisma client and applies the schema. It does not seed or reset database records. To create the demo dataset in a new, empty database only, run `npm run db:seed`; the seed command refuses to run when any application records already exist.*
 
 ### Step 3: Start Frontend and Backend Concurrently
 ```bash
@@ -294,10 +294,12 @@ Both applications will start in parallel:
 
 ## 9. Environment Variables (`server/.env`)
 
+Use unique random values for `JWT_SECRET` and `WEBHOOK_SECRET`; do not commit real secrets or reuse the placeholders below in production.
+
 ```env
 PORT=5000
 DATABASE_URL="file:./dev.db"
-JWT_SECRET="bugtrack-ai-super-secret-jwt-key-2025-secure"
+JWT_SECRET="<generate-a-unique-secret>"
 JWT_EXPIRES_IN="7d"
 NODE_ENV="development"
 CORS_ORIGIN="http://localhost:5173"
@@ -305,8 +307,10 @@ CORS_ORIGIN="http://localhost:5173"
 # Optional Cloud Integrations (Application runs seamlessly with local fallback if empty)
 GEMINI_API_KEY=""
 GITHUB_TOKEN=""
-WEBHOOK_SECRET="bugtrack-webhook-secret-token"
+WEBHOOK_SECRET="<generate-a-unique-secret>"
 ```
+
+For local development, leaving either secret unset generates an ephemeral random secret; active login sessions are invalidated when the server restarts. Explicit secrets must be at least 32 characters and sufficiently random. Generate separate values with `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` and replace both placeholders. Production startup rejects missing or placeholder secrets.
 
 ---
 

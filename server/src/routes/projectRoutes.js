@@ -8,7 +8,7 @@ const {
   addMember,
   removeMember,
 } = require('../controllers/projectController');
-const { authenticate, authorize } = require('../middleware/authMiddleware');
+const { authenticate, authorize, requireProjectMember } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
@@ -16,7 +16,7 @@ router.use(authenticate);
 
 router.post('/', authorize('ADMIN'), createProject);
 router.get('/', getProjects);
-router.get('/:id', getProjectById);
+router.get('/:id', requireProjectMember(), getProjectById);
 router.put('/:id', authorize('ADMIN'), updateProject);
 router.delete('/:id', authorize('ADMIN'), deleteProject);
 

@@ -3,10 +3,22 @@ const prisma = require('../config/db');
 async function getSummary(req, res, next) {
   try {
     const { projectId } = req.query;
-    const filter = {};
+    const filter = req.user.role === 'ADMIN'
+      ? {}
+      : { project: { members: { some: { userId: req.user.id } } } };
     if (projectId) {
       filter.projectId = projectId;
     }
+    const projectFilter = req.user.role === 'ADMIN'
+      ? (projectId ? { id: projectId } : {})
+      : {
+          members: {
+            some: {
+              userId: req.user.id,
+              ...(projectId ? { projectId } : {}),
+            },
+          },
+        };
 
     const [
       totalProjects,
@@ -21,7 +33,7 @@ async function getSummary(req, res, next) {
       highIssues,
       totalUsers,
     ] = await Promise.all([
-      prisma.project.count(),
+      prisma.project.count({ where: projectFilter }),
       prisma.issue.count({ where: filter }),
       prisma.issue.count({ where: { ...filter, status: 'OPEN' } }),
       prisma.issue.count({ where: { ...filter, status: 'ASSIGNED' } }),
@@ -31,7 +43,18 @@ async function getSummary(req, res, next) {
       prisma.issue.count({ where: { ...filter, status: 'REOPENED' } }),
       prisma.issue.count({ where: { ...filter, severity: 'CRITICAL' } }),
       prisma.issue.count({ where: { ...filter, severity: 'HIGH' } }),
-      prisma.user.count(),
+      req.user.role === 'ADMIN'
+        ? prisma.user.count()
+        : prisma.user.count({
+            where: {
+              projectMembers: {
+                some: {
+                  ...(projectId ? { projectId } : {}),
+                  project: { members: { some: { userId: req.user.id } } },
+                },
+              },
+            },
+          }),
     ]);
 
     return res.json({
@@ -58,7 +81,9 @@ async function getSummary(req, res, next) {
 async function getAnalytics(req, res, next) {
   try {
     const { projectId } = req.query;
-    const filter = {};
+    const filter = req.user.role === 'ADMIN'
+      ? {}
+      : { project: { members: { some: { userId: req.user.id } } } };
     if (projectId) {
       filter.projectId = projectId;
     }
@@ -124,7 +149,19 @@ async function getAnalytics(req, res, next) {
 
     // 4. Developer Workload
     const developers = await prisma.user.findMany({
-      where: { role: 'DEVELOPER' },
+      where: {
+        role: 'DEVELOPER',
+        ...(req.user.role === 'ADMIN'
+          ? {}
+          : {
+              projectMembers: {
+                some: {
+                  ...(projectId ? { projectId } : {}),
+                  project: { members: { some: { userId: req.user.id } } },
+                },
+              },
+            }),
+      },
       select: {
         id: true,
         name: true,

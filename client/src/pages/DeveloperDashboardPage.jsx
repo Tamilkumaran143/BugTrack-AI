@@ -75,20 +75,11 @@ export function DeveloperDashboardPage() {
     try {
       const res = await api.post('/github/link-pr', {
         issueId: activeIssue.id,
-        prUrl: prUrl.trim() || undefined,
-        customPrData: !prUrl.trim()
-          ? {
-              repository: activeIssue.project?.name.toLowerCase().replace(/\s+/g, '-') || 'demo/app',
-              prNumber: Math.floor(100 + Math.random() * 900),
-              title: `fix(${activeIssue.issueKey}): resolve ${activeIssue.title}`,
-              body: 'Automated patch addressing root defect and boundary conditions.',
-              changedFiles: ['server/src/controllers/authController.js', 'client/src/pages/LoginPage.jsx'],
-            }
-          : undefined,
+        prUrl: prUrl.trim(),
       });
 
       if (res.data.success) {
-        success(`PR linked! AI Risk: ${res.data.data.pullRequest.riskNotes?.riskLevel || 'Analyzed'}. Issue moved to READY_FOR_TESTING.`);
+        success(res.data.message || 'Verified pull request linked and analyzed.');
         setPrModalOpen(false);
         loadDevData();
       }
@@ -250,6 +241,13 @@ export function DeveloperDashboardPage() {
 
                         <Link
                           to={`/issues/${issue.id}`}
+                          className="px-2.5 py-1 border border-violet-200 hover:bg-violet-50 text-violet-700 rounded-lg font-bold text-xs transition"
+                        >
+                          AI Fix
+                        </Link>
+
+                        <Link
+                          to={`/issues/${issue.id}`}
                           className="px-2.5 py-1 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg font-bold text-xs transition"
                         >
                           View
@@ -281,14 +279,15 @@ export function DeveloperDashboardPage() {
               GitHub Pull Request URL
             </label>
             <input
-              type="text"
+              type="url"
+              required
               value={prUrl}
               onChange={(e) => setPrUrl(e.target.value)}
               placeholder="e.g. https://github.com/facebook/react/pull/28419"
               className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
             />
             <p className="text-[11px] text-slate-400 mt-1">
-              Leave blank to automatically simulate a sample patch with file diffs.
+              A live GitHub API lookup is required; pull request details are never simulated.
             </p>
           </div>
 
@@ -309,7 +308,7 @@ export function DeveloperDashboardPage() {
             </button>
             <button
               type="submit"
-              disabled={linking}
+              disabled={linking || !prUrl.trim()}
               className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition shadow-sm"
             >
               {linking ? 'Analyzing PR with AI...' : 'Link PR & Run AI Risk'}

@@ -10,27 +10,27 @@ const {
 } = require('../controllers/issueController');
 const { addComment, getComments } = require('../controllers/commentController');
 const { createVerification, getVerifications } = require('../controllers/verificationController');
-const { authenticate, authorize } = require('../middleware/authMiddleware');
+const { authenticate, authorize, requireProjectMember, requireIssueProjectMember } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
 router.use(authenticate);
 
 // Issue endpoints
-router.post('/', authorize('ADMIN', 'TESTER'), createIssue);
+router.post('/', authorize('ADMIN', 'TESTER'), requireProjectMember(), createIssue);
 router.get('/', getIssues);
-router.get('/:id', getIssueById);
-router.put('/:id', updateIssue);
-router.patch('/:id/status', updateStatus);
-router.patch('/:id/assign', authorize('ADMIN'), assignDeveloper);
-router.delete('/:id', authorize('ADMIN'), deleteIssue);
+router.get('/:id', requireIssueProjectMember(), getIssueById);
+router.put('/:id', authorize('ADMIN', 'TESTER'), requireIssueProjectMember(), updateIssue);
+router.patch('/:id/status', requireIssueProjectMember(), updateStatus);
+router.patch('/:id/assign', authorize('ADMIN'), requireIssueProjectMember(), assignDeveloper);
+router.delete('/:id', authorize('ADMIN'), requireIssueProjectMember(), deleteIssue);
 
 // Comments
-router.post('/:id/comments', addComment);
-router.get('/:id/comments', getComments);
+router.post('/:id/comments', requireIssueProjectMember(), addComment);
+router.get('/:id/comments', requireIssueProjectMember(), getComments);
 
 // Regression Verification (TESTER or ADMIN)
-router.post('/:id/verification', authorize('ADMIN', 'TESTER'), createVerification);
-router.get('/:id/verification', getVerifications);
+router.post('/:id/verification', authorize('ADMIN', 'TESTER'), requireIssueProjectMember(), createVerification);
+router.get('/:id/verification', requireIssueProjectMember(), getVerifications);
 
 module.exports = router;

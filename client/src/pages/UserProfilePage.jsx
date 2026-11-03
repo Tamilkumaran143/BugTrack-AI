@@ -139,9 +139,10 @@ export function UserProfilePage() {
                 <label className="block text-xs text-slate-500 mb-1">New Password</label>
                 <input
                   type="password"
+                  minLength={8}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password (min 6 characters)"
+                  placeholder="Enter new password (min 8 characters)"
                   className="w-full text-sm p-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500"
                 />
               </div>

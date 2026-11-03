@@ -9,6 +9,12 @@ const ALLOWED_TRANSITIONS = {
   REOPENED: ['IN_PROGRESS', 'ASSIGNED', 'READY_FOR_TESTING'],
   CLOSED: ['REOPENED', 'OPEN'],
 };
+const VALID_LEVELS = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
+const VALID_STATUSES = new Set(Object.keys(ALLOWED_TRANSITIONS));
+
+function isOptionalText(value) {
+  return value === undefined || value === null || typeof value === 'string';
+}
 
 async function generateNextIssueKey(projectId) {
   const project = await prisma.project.findUnique({
@@ -61,11 +67,50 @@ async function createIssue(req, res, next) {
       assigneeId,
     } = req.body;
 
-    if (!projectId || !title || !description) {
+    if (
+      typeof projectId !== 'string'
+      || typeof title !== 'string'
+      || typeof description !== 'string'
+      || !title.trim()
+      || !description.trim()
+    ) {
       return res.status(400).json({
         success: false,
         message: 'Project, title, and description are required.',
       });
+    }
+    if (title.trim().length > 200 || description.trim().length > 10000) {
+      return res.status(400).json({ success: false, message: 'Title must be at most 200 characters and description at most 10,000.' });
+    }
+    if (!VALID_LEVELS.has(String(severity).toUpperCase()) || !VALID_LEVELS.has(String(priority).toUpperCase())) {
+      return res.status(400).json({ success: false, message: 'Severity and priority must be LOW, MEDIUM, HIGH, or CRITICAL.' });
+    }
+    for (const [field, value] of Object.entries({ stepsToReproduce, expectedResult, actualResult, environment })) {
+      if (!isOptionalText(value)) {
+        return res.status(400).json({ success: false, message: `${field} must be a string or null.` });
+      }
+    }
+    if (assigneeId && req.user.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, message: 'Only administrators can assign a developer during issue creation.' });
+    }
+
+    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+    if (!project) {
+      return res.status(404).json({ success: false, message: 'Project not found.' });
+    }
+
+    if (assigneeId) {
+      const assignee = await prisma.user.findFirst({
+        where: {
+          id: assigneeId,
+          role: 'DEVELOPER',
+          projectMembers: { some: { projectId } },
+        },
+        select: { id: true },
+      });
+      if (!assignee) {
+        return res.status(400).json({ success: false, message: 'Assignee must be a developer who belongs to this project.' });
+      }
     }
 
     const issueKey = await generateNextIssueKey(projectId);
@@ -141,13 +186,25 @@ async function getIssues(req, res, next) {
     const where = {};
 
     if (projectId) where.projectId = projectId;
-    if (status) where.status = status;
-    if (severity) where.severity = severity;
-    if (priority) where.priority = priority;
+    if (status) {
+      if (!VALID_STATUSES.has(status)) return res.status(400).json({ success: false, message: 'Invalid issue status filter.' });
+      where.status = status;
+    }
+    if (severity) {
+      if (!VALID_LEVELS.has(severity)) return res.status(400).json({ success: false, message: 'Invalid severity filter.' });
+      where.severity = severity;
+    }
+    if (priority) {
+      if (!VALID_LEVELS.has(priority)) return res.status(400).json({ success: false, message: 'Invalid priority filter.' });
+      where.priority = priority;
+    }
     if (assigneeId) where.assigneeId = assigneeId;
     if (reporterId) where.reporterId = reporterId;
 
     if (search) {
+      if (typeof search !== 'string' || search.length > 200) {
+        return res.status(400).json({ success: false, message: 'Search must be at most 200 characters.' });
+      }
       where.OR = [
         { title: { contains: search } },
         { description: { contains: search } },
@@ -162,6 +219,9 @@ async function getIssues(req, res, next) {
     }
     if (req.query.reportedByMe === 'true') {
       where.reporterId = req.user.id;
+    }
+    if (req.user.role !== 'ADMIN') {
+      where.project = { members: { some: { userId: req.user.id } } };
     }
 
     const issues = await prisma.issue.findMany({
@@ -278,55 +338,47 @@ async function updateIssue(req, res, next) {
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Issue not found.' });
     }
-
-    const updateData = {};
-    if (title !== undefined) updateData.title = title.trim();
-    if (description !== undefined) updateData.description = description.trim();
-    if (stepsToReproduce !== undefined) updateData.stepsToReproduce = stepsToReproduce ? stepsToReproduce.trim() : null;
-    if (expectedResult !== undefined) updateData.expectedResult = expectedResult ? expectedResult.trim() : null;
-    if (actualResult !== undefined) updateData.actualResult = actualResult ? actualResult.trim() : null;
-    if (environment !== undefined) updateData.environment = environment ? environment.trim() : null;
-    if (severity !== undefined) updateData.severity = severity.toUpperCase();
-    if (priority !== undefined) updateData.priority = priority.toUpperCase();
-
-    // Assignee change
-    if (assigneeId !== undefined && assigneeId !== existing.assigneeId) {
-      updateData.assigneeId = assigneeId || null;
-      let newAssigneeName = 'Unassigned';
-      if (assigneeId) {
-        const newDev = await prisma.user.findUnique({ where: { id: assigneeId } });
-        newAssigneeName = newDev ? newDev.name : assigneeId;
-        // If status was OPEN, transition to ASSIGNED
-        if (existing.status === 'OPEN') {
-          updateData.status = 'ASSIGNED';
-        }
-      }
-
-      await prisma.activity.create({
-        data: {
-          issueId: existing.id,
-          userId: req.user.id,
-          action: 'ASSIGNED',
-          oldValue: existing.assignee ? existing.assignee.name : 'Unassigned',
-          newValue: newAssigneeName,
-        },
-      });
+    if (req.user.role !== 'ADMIN' && existing.reporterId !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Only the reporter or an administrator can edit issue details.' });
+    }
+    if (status !== undefined || assigneeId !== undefined) {
+      return res.status(400).json({ success: false, message: 'Use the dedicated status and assignment actions to change those fields.' });
     }
 
-    // Status change
-    if (status !== undefined && status !== existing.status) {
-      const newStatus = status.toUpperCase();
-      updateData.status = newStatus;
-
-      await prisma.activity.create({
-        data: {
-          issueId: existing.id,
-          userId: req.user.id,
-          action: 'STATUS_CHANGE',
-          oldValue: existing.status,
-          newValue: newStatus,
-        },
-      });
+    const updateData = {};
+    for (const [field, value] of Object.entries({
+      title,
+      description,
+      stepsToReproduce,
+      expectedResult,
+      actualResult,
+      environment,
+    })) {
+      if (value !== undefined && !isOptionalText(value)) {
+        return res.status(400).json({ success: false, message: `${field} must be a string or null.` });
+      }
+    }
+    if (title !== undefined) {
+      if (!title.trim() || title.trim().length > 200) return res.status(400).json({ success: false, message: 'Title must be between 1 and 200 characters.' });
+      updateData.title = title.trim();
+    }
+    if (description !== undefined) {
+      if (!description.trim() || description.trim().length > 10000) return res.status(400).json({ success: false, message: 'Description must be between 1 and 10,000 characters.' });
+      updateData.description = description.trim();
+    }
+    for (const field of ['stepsToReproduce', 'expectedResult', 'actualResult', 'environment']) {
+      if (req.body[field] !== undefined) updateData[field] = req.body[field]?.trim() || null;
+    }
+    if (severity !== undefined) {
+      if (!VALID_LEVELS.has(String(severity).toUpperCase())) return res.status(400).json({ success: false, message: 'Invalid severity.' });
+      updateData.severity = severity.toUpperCase();
+    }
+    if (priority !== undefined) {
+      if (!VALID_LEVELS.has(String(priority).toUpperCase())) return res.status(400).json({ success: false, message: 'Invalid priority.' });
+      updateData.priority = priority.toUpperCase();
+    }
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ success: false, message: 'At least one editable issue field is required.' });
     }
 
     const updated = await prisma.issue.update({
@@ -354,37 +406,51 @@ async function updateStatus(req, res, next) {
     const { id } = req.params;
     const { status } = req.body;
 
-    if (!status) {
+    if (typeof status !== 'string' || !status.trim()) {
       return res.status(400).json({ success: false, message: 'Status is required.' });
     }
 
     const nextStatus = status.toUpperCase();
+    if (!VALID_STATUSES.has(nextStatus)) {
+      return res.status(400).json({ success: false, message: 'Invalid issue status.' });
+    }
     const issue = await prisma.issue.findUnique({ where: { id } });
 
     if (!issue) {
       return res.status(404).json({ success: false, message: 'Issue not found.' });
     }
 
-    // Role checks on status updates
-    // TESTER: can verify (READY_FOR_TESTING -> CLOSED or REOPENED)
-    // DEVELOPER: can start work (ASSIGNED -> IN_PROGRESS), finish work (IN_PROGRESS -> READY_FOR_TESTING)
-    // ADMIN: can make any status transition
+    if (nextStatus === issue.status) {
+      return res.status(400).json({ success: false, message: 'Issue is already in that status.' });
+    }
+    if (!ALLOWED_TRANSITIONS[issue.status]?.includes(nextStatus)) {
+      return res.status(400).json({ success: false, message: `Status cannot transition from ${issue.status} to ${nextStatus}.` });
+    }
+
     if (req.user.role === 'DEVELOPER') {
-      if (['CLOSED'].includes(nextStatus)) {
+      const developerTransitions = {
+        ASSIGNED: ['IN_PROGRESS'],
+        IN_PROGRESS: ['READY_FOR_TESTING'],
+        REOPENED: ['IN_PROGRESS', 'READY_FOR_TESTING'],
+      };
+      if (issue.assigneeId !== req.user.id || !developerTransitions[issue.status]?.includes(nextStatus)) {
         return res.status(403).json({
           success: false,
-          message: 'Developers cannot close issues directly. Please move to READY_FOR_TESTING for QA verification.',
+          message: 'Developers may only transition their assigned issues through the development workflow.',
         });
       }
     }
 
     if (req.user.role === 'TESTER') {
-      if (issue.status !== 'READY_FOR_TESTING' && nextStatus === 'CLOSED') {
+      if (nextStatus !== 'READY_FOR_TESTING') {
         return res.status(400).json({
           success: false,
-          message: 'Only issues currently READY_FOR_TESTING can be verified and closed by QA.',
+          message: 'Testers must use QA verification to close or reopen an issue.',
         });
       }
+    }
+    if (req.user.role !== 'ADMIN' && req.user.role !== 'DEVELOPER' && req.user.role !== 'TESTER') {
+      return res.status(403).json({ success: false, message: 'Role is not allowed to transition issue status.' });
     }
 
     const updated = await prisma.issue.update({
@@ -419,6 +485,9 @@ async function assignDeveloper(req, res, next) {
   try {
     const { id } = req.params;
     const { assigneeId } = req.body;
+    if (assigneeId !== null && typeof assigneeId !== 'string') {
+      return res.status(400).json({ success: false, message: 'assigneeId must be a developer ID or null.' });
+    }
 
     const issue = await prisma.issue.findUnique({
       where: { id },
@@ -431,14 +500,24 @@ async function assignDeveloper(req, res, next) {
 
     let devName = 'Unassigned';
     if (assigneeId) {
-      const dev = await prisma.user.findUnique({ where: { id: assigneeId } });
+      const dev = await prisma.user.findFirst({
+        where: {
+          id: assigneeId,
+          role: 'DEVELOPER',
+          projectMembers: { some: { projectId: issue.projectId } },
+        },
+      });
       if (!dev) {
-        return res.status(404).json({ success: false, message: 'Developer user not found.' });
+        return res.status(400).json({ success: false, message: 'Assignee must be a developer who belongs to this project.' });
       }
       devName = dev.name;
     }
 
-    const newStatus = assigneeId && issue.status === 'OPEN' ? 'ASSIGNED' : issue.status;
+    const newStatus = assigneeId && issue.status === 'OPEN'
+      ? 'ASSIGNED'
+      : !assigneeId && issue.status === 'ASSIGNED'
+        ? 'OPEN'
+        : issue.status;
 
     const updated = await prisma.issue.update({
       where: { id },
@@ -486,6 +565,9 @@ async function assignDeveloper(req, res, next) {
 async function deleteIssue(req, res, next) {
   try {
     const { id } = req.params;
+
+    const issue = await prisma.issue.findUnique({ where: { id } });
+    if (!issue) return res.status(404).json({ success: false, message: 'Issue not found.' });
 
     await prisma.issue.delete({
       where: { id },

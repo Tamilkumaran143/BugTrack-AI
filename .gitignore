@@ -16,6 +16,9 @@ build/
 *.db-journal
 *.sqlite
 *.sqlite3
+server/prisma/.test-*.db*
+server/.bugtrack-ai-fix-backups/
+server/src/services/file.jpg
 
 # Logs
 *.log

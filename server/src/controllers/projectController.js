@@ -4,11 +4,17 @@ async function createProject(req, res, next) {
   try {
     const { name, description, githubRepository } = req.body;
 
-    if (!name) {
+    if (typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({
         success: false,
         message: 'Project name is required.',
       });
+    }
+    if (description !== undefined && description !== null && typeof description !== 'string') {
+      return res.status(400).json({ success: false, message: 'Project description must be a string.' });
+    }
+    if (githubRepository !== undefined && githubRepository !== null && typeof githubRepository !== 'string') {
+      return res.status(400).json({ success: false, message: 'GitHub repository must be a string.' });
     }
 
     const project = await prisma.project.create({
@@ -118,9 +124,27 @@ async function updateProject(req, res, next) {
     const { name, description, githubRepository } = req.body;
 
     const updateData = {};
-    if (name !== undefined) updateData.name = name.trim();
-    if (description !== undefined) updateData.description = description.trim();
-    if (githubRepository !== undefined) updateData.githubRepository = githubRepository.trim();
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ success: false, message: 'Project name must be a non-empty string.' });
+      }
+      updateData.name = name.trim();
+    }
+    if (description !== undefined) {
+      if (description !== null && typeof description !== 'string') {
+        return res.status(400).json({ success: false, message: 'Project description must be a string or null.' });
+      }
+      updateData.description = description?.trim() || null;
+    }
+    if (githubRepository !== undefined) {
+      if (githubRepository !== null && typeof githubRepository !== 'string') {
+        return res.status(400).json({ success: false, message: 'GitHub repository must be a string or null.' });
+      }
+      updateData.githubRepository = githubRepository?.trim() || null;
+    }
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ success: false, message: 'At least one project field is required.' });
+    }
 
     const updated = await prisma.project.update({
       where: { id },
@@ -168,6 +192,9 @@ async function addMember(req, res, next) {
         message: 'userId is required.',
       });
     }
+    if (role !== undefined && !['ADMIN', 'TESTER', 'DEVELOPER'].includes(role)) {
+      return res.status(400).json({ success: false, message: 'Project role must be ADMIN, TESTER, or DEVELOPER.' });
+    }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
@@ -200,6 +227,13 @@ async function addMember(req, res, next) {
 async function removeMember(req, res, next) {
   try {
     const { id, userId } = req.params;
+
+    const membership = await prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId: id, userId } },
+    });
+    if (!membership) {
+      return res.status(404).json({ success: false, message: 'Project member not found.' });
+    }
 
     await prisma.projectMember.delete({
       where: {

@@ -4,10 +4,18 @@ const prisma = require('../config/db');
 const geminiService = require('../services/geminiService');
 
 function verifyGithubSignature(secret, payload, signatureHeader) {
-  if (!signatureHeader) return false;
+  if (
+    typeof secret !== 'string'
+    || !secret
+    || !Buffer.isBuffer(payload)
+    || typeof signatureHeader !== 'string'
+    || !/^sha256=[a-f0-9]{64}$/i.test(signatureHeader)
+  ) return false;
+
   const hmac = crypto.createHmac('sha256', secret);
-  const digest = 'sha256=' + hmac.update(payload).digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signatureHeader));
+  const digest = Buffer.from(`sha256=${hmac.update(payload).digest('hex')}`);
+  const provided = Buffer.from(signatureHeader);
+  return digest.length === provided.length && crypto.timingSafeEqual(digest, provided);
 }
 
 async function handleGithubWebhook(req, res, next) {
@@ -15,16 +23,11 @@ async function handleGithubWebhook(req, res, next) {
     const event = req.headers['x-github-event'] || 'unknown';
     const signature = req.headers['x-hub-signature-256'];
 
-    // Verify webhook signature if secret configured and header provided
-    if (config.WEBHOOK_SECRET && signature) {
-      const isValid = verifyGithubSignature(
-        config.WEBHOOK_SECRET,
-        JSON.stringify(req.body),
-        signature
-      );
-      if (!isValid) {
-        return res.status(401).json({ success: false, message: 'Invalid webhook signature.' });
-      }
+    if (!config.WEBHOOK_SECRET) {
+      return res.status(503).json({ success: false, message: 'GitHub webhook verification is not configured.' });
+    }
+    if (!verifyGithubSignature(config.WEBHOOK_SECRET, req.rawBody, signature)) {
+      return res.status(401).json({ success: false, message: 'Invalid or missing webhook signature.' });
     }
 
     const payload = req.body;
@@ -38,7 +41,6 @@ async function handleGithubWebhook(req, res, next) {
       const pr = payload.pull_request;
 
       if (pr) {
-        // Look for existing PR linked in database
         const existingPr = await prisma.pullRequest.findFirst({
           where: {
             repository: payload.repository?.full_name || '',
@@ -48,30 +50,30 @@ async function handleGithubWebhook(req, res, next) {
         });
 
         if (existingPr) {
-          await prisma.pullRequest.update({
-            where: { id: existingPr.id },
-            data: {
-              state: pr.state,
-              title: pr.title,
-            },
+          await prisma.$transaction(async (tx) => {
+            await tx.pullRequest.update({
+              where: { id: existingPr.id },
+              data: { state: pr.state, title: pr.title },
+            });
+
+            if (action === 'closed' && pr.merged) {
+              const issue = await tx.issue.findUnique({ where: { id: existingPr.issueId } });
+              if (issue?.status === 'IN_PROGRESS') {
+                await tx.issue.update({
+                  where: { id: issue.id },
+                  data: { status: 'READY_FOR_TESTING' },
+                });
+                await tx.activity.create({
+                  data: {
+                    issueId: issue.id,
+                    action: 'STATUS_CHANGE',
+                    oldValue: issue.status,
+                    newValue: 'READY_FOR_TESTING',
+                  },
+                });
+              }
+            }
           });
-
-          // If PR was closed / merged
-          if (action === 'closed' && pr.merged) {
-            await prisma.activity.create({
-              data: {
-                issueId: existingPr.issueId,
-                action: 'STATUS_CHANGE',
-                oldValue: existingPr.issue.status,
-                newValue: 'READY_FOR_TESTING',
-              },
-            });
-
-            await prisma.issue.update({
-              where: { id: existingPr.issueId },
-              data: { status: 'READY_FOR_TESTING' },
-            });
-          }
         }
       }
     }

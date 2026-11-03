@@ -34,8 +34,10 @@ import api from '../services/api';
 import { StatCard } from '../components/StatCard';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useToast } from '../context/ToastContext';
+import { useAuth } from '../context/AuthContext';
 
 export function DashboardPage() {
+  const { isAdmin, isTester } = useAuth();
   const [summary, setSummary] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [projects, setProjects] = useState([]);
@@ -91,12 +93,12 @@ export function DashboardPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="relative">
+        <div className="flex w-full flex-wrap items-center gap-3 md:w-auto">
+          <div className="relative min-w-0 flex-1 md:flex-none">
             <select
               value={selectedProject}
               onChange={(e) => setSelectedProject(e.target.value)}
-              className="pl-3 pr-8 py-2 text-xs font-semibold bg-white border border-slate-200 rounded-xl shadow-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              className="w-full max-w-full pl-3 pr-8 py-2 text-xs font-semibold bg-white border border-slate-200 rounded-xl shadow-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500 md:w-auto"
             >
               <option value="">All Projects Combined</option>
               {projects.map((p) => (
@@ -115,13 +117,13 @@ export function DashboardPage() {
             <RefreshCw className="w-4 h-4" />
           </button>
 
-          <Link
+          {(isAdmin || isTester) && <Link
             to="/issues/create"
             className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold rounded-xl shadow-sm shadow-brand-600/30 transition"
           >
             <Plus className="w-4 h-4" />
             Report Bug
-          </Link>
+          </Link>}
         </div>
       </div>
 
